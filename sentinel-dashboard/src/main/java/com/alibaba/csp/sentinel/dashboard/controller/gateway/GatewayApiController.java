@@ -26,15 +26,19 @@ import com.alibaba.csp.sentinel.dashboard.domain.vo.gateway.api.AddApiReqVo;
 import com.alibaba.csp.sentinel.dashboard.domain.vo.gateway.api.ApiPredicateItemVo;
 import com.alibaba.csp.sentinel.dashboard.domain.vo.gateway.api.UpdateApiReqVo;
 import com.alibaba.csp.sentinel.dashboard.repository.gateway.InMemApiDefinitionStore;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRuleProvider;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRulePublisher;
 import com.alibaba.csp.sentinel.util.StringUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.util.CollectionUtils;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import static com.alibaba.csp.sentinel.adapter.gateway.common.SentinelGatewayConstants.*;
 
@@ -56,6 +60,13 @@ public class GatewayApiController {
     @Autowired
     private SentinelApiClient sentinelApiClient;
 
+    @Autowired
+    @Qualifier("gatewayApiRuleNacosProvider")
+    private DynamicRuleProvider<List<ApiDefinitionEntity>> ruleProvider;
+    @Autowired
+    @Qualifier("gatewayApiRuleNacosPublisher")
+    private DynamicRulePublisher<List<ApiDefinitionEntity>> rulePublisher;
+
     @GetMapping("/list.json")
     @AuthAction(AuthService.PrivilegeType.READ_RULE)
     public Result<List<ApiDefinitionEntity>> queryApis(String app, String ip, Integer port) {
@@ -71,7 +82,8 @@ public class GatewayApiController {
         }
 
         try {
-            List<ApiDefinitionEntity> apis = sentinelApiClient.fetchApis(app, ip, port).get();
+            // List<ApiDefinitionEntity> apis = sentinelApiClient.fetchApis(app, ip, port).get();
+            List<ApiDefinitionEntity> apis = ruleProvider.getRules(app);
             repository.saveAll(apis);
             return Result.ofSuccess(apis);
         } catch (Throwable throwable) {
@@ -123,7 +135,8 @@ public class GatewayApiController {
 
             // 匹配模式
             Integer matchStrategy = predicateItem.getMatchStrategy();
-            if (!Arrays.asList(URL_MATCH_STRATEGY_EXACT, URL_MATCH_STRATEGY_PREFIX, URL_MATCH_STRATEGY_REGEX).contains(matchStrategy)) {
+            if (!Arrays.asList(URL_MATCH_STRATEGY_EXACT, URL_MATCH_STRATEGY_PREFIX, URL_MATCH_STRATEGY_REGEX)
+                    .contains(matchStrategy)) {
                 return Result.ofFail(-1, "invalid matchStrategy: " + matchStrategy);
             }
             predicateItemEntity.setMatchStrategy(matchStrategy);
@@ -193,7 +206,8 @@ public class GatewayApiController {
 
             // 匹配模式
             int matchStrategy = predicateItem.getMatchStrategy();
-            if (!Arrays.asList(URL_MATCH_STRATEGY_EXACT, URL_MATCH_STRATEGY_PREFIX, URL_MATCH_STRATEGY_REGEX).contains(matchStrategy)) {
+            if (!Arrays.asList(URL_MATCH_STRATEGY_EXACT, URL_MATCH_STRATEGY_PREFIX, URL_MATCH_STRATEGY_REGEX)
+                    .contains(matchStrategy)) {
                 return Result.ofFail(-1, "Invalid matchStrategy: " + matchStrategy);
             }
             predicateItemEntity.setMatchStrategy(matchStrategy);
@@ -255,6 +269,13 @@ public class GatewayApiController {
 
     private boolean publishApis(String app, String ip, Integer port) {
         List<ApiDefinitionEntity> apis = repository.findAllByMachine(MachineInfo.of(app, ip, port));
-        return sentinelApiClient.modifyApis(app, ip, port, apis);
+        // return sentinelApiClient.modifyApis(app, ip, port, apis);
+        try {
+            rulePublisher.publish(app, apis);
+            TimeUnit.MILLISECONDS.sleep(200);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
